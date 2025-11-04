@@ -89,9 +89,9 @@
     <th>Unity Scene 결과</th>
   </tr>
   <tr>
-    <td align="center"><img src="https://github.com/user/repo/assets/input_example.png" width="220"></td>
-    <td align="center"><img src="https://github.com/user/repo/assets/mask_example.png" width="220"></td>
-    <td align="center"><img src="https://github.com/user/repo/assets/result_example.png" width="220"></td>
+    <td align="center"><img width="341" height="395" alt="image" src="https://github.com/user-attachments/assets/bb4e3363-b164-4f18-93dc-1e1fa5390bcf" /></td>
+    <td align="center"><img width="374" height="399" alt="image" src="https://github.com/user-attachments/assets/9ce06f58-9473-4f1a-a217-a8fcadd384bc" /></td>
+    <td align="center"><img width="457" height="417" alt="image" src="https://github.com/user-attachments/assets/3182285e-32fc-4e2b-9ce4-f915f3e2cff5" /></td>
   </tr>
 </table>
 
