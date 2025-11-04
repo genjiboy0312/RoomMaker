@@ -59,11 +59,6 @@
     <td><code>_floorColor</code></td>
     <td>⚪ 회색</td>
   </tr>
-  <tr>
-    <td>테두리(내부 접경)</td>
-    <td><code>_borderColor</code></td>
-    <td>🔵 파랑</td>
-  </tr>
 </table>
 
 <hr>
