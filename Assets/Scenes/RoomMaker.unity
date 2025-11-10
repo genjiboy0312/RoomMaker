@@ -587,12 +587,13 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _floorPlanImage: {fileID: 1608383258}
-  _planeSize: {x: 40, y: 20}
+  _planeSize: {x: 40, y: 40}
   _wallColor: {r: 1, g: 0, b: 0, a: 1}
   _floorColor: {r: 0.5, g: 0.5, b: 0.5, a: 1}
+  _innerColor: {r: 0, g: 0, b: 1, a: 1}
   _wallHeight: 3
   _wallRiseSpeed: 0.5
-  _minRoomPixel: 5
+  _minRoomPixel: 0.001
 --- !u!1 &965598733
 GameObject:
   m_ObjectHideFlags: 0
@@ -832,7 +833,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Texture: {fileID: 2800000, guid: 96520052d065b5f4ba19945b8dc3bc8e, type: 3}
+  m_Texture: {fileID: 2800000, guid: 7a1f763e44a1ce544a526d94ba2e647e, type: 3}
   m_UVRect:
     serializedVersion: 2
     x: 0
