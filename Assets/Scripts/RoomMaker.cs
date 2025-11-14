@@ -1,9 +1,13 @@
 ﻿using OpenCVForUnity.CoreModule;
 using OpenCVForUnity.ImgprocModule;
+using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text;
 using UnityEngine;
+using UnityEngine.Networking;
 using UnityEngine.UI;
 
 /// <summary>
@@ -60,6 +64,8 @@ public class RoomMaker : MonoBehaviour
     [SerializeField] private float _wallRiseSpeed = 1f;
     [SerializeField] private float _minRoomPixel = 50; // 최소 픽셀수
 
+    [SerializeField] private FlaskClient _flaskClient;
+
     private Texture2D _texCopy;
     private float[,] _wallMap;
     private List<Vector2[]> _segments;
@@ -90,9 +96,14 @@ public class RoomMaker : MonoBehaviour
         GameObject mergedWalls = GenerateWallsFromSegments(_segments, floorPlanGO.transform);
 
         // _innerColor 경계선 기반 벽 생성
-        //GameObject innerEdgeWalls = GenerateInnerEdgeWalls(floorPlanGO.transform, _segments);
-    }
+        GameObject innerEdgeWalls = GenerateInnerEdgeWalls(floorPlanGO.transform, _segments);
 
+        SendProjectDataToServer();
+
+        FloorData floorData = GenerateFloorDataFromTexture(_texCopy);
+        SaveAndSendFloorData(floorData);
+
+    }
     #endregion
 
     #region Texture 처리
@@ -117,38 +128,27 @@ public class RoomMaker : MonoBehaviour
             {
                 Color32 c = pixels[y * w + x];
 
-                // 검정
                 if (c.r < 50 && c.g < 50 && c.b < 50)
-                {
                     _wallMap[x, y] = 1;
-                }
-                // 빨강
                 else if (c.r > 200 && c.g < 50 && c.b < 50)
-                {
                     _wallMap[x, y] = 2;
-                }
-                // 어두운 회색 계열(R≈G≈B, 밝기 낮은 회색)
                 else if (Mathf.Abs(c.r - c.g) < 10 && Mathf.Abs(c.g - c.b) < 10 && c.r < 150)
-                {
                     _wallMap[x, y] = 1;
-                }
                 else
-                {
-                    _wallMap[x, y] = 0; // 바닥
-                }
+                    _wallMap[x, y] = 0;
             }
         }
     }
-
 
     private void ColorFloorInsideWalls()
     {
         int w = _texCopy.width;
         int h = _texCopy.height;
         Color32[] pixels = _texCopy.GetPixels32();
-
         bool[,] visited = new bool[w, h];
         Queue<Vector2Int> queue = new Queue<Vector2Int>();
+        int[] dx = { 1, -1, 0, 0 };
+        int[] dy = { 0, 0, 1, -1 };
 
         // 외곽 FloodFill
         for (int i = 0; i < w; i++)
@@ -161,9 +161,6 @@ public class RoomMaker : MonoBehaviour
             if (!visited[0, j]) { queue.Enqueue(new Vector2Int(0, j)); visited[0, j] = true; }
             if (!visited[w - 1, j]) { queue.Enqueue(new Vector2Int(w - 1, j)); visited[w - 1, j] = true; }
         }
-
-        int[] dx = { 1, -1, 0, 0 };
-        int[] dy = { 0, 0, 1, -1 };
 
         while (queue.Count > 0)
         {
@@ -179,7 +176,6 @@ public class RoomMaker : MonoBehaviour
             }
         }
 
-        // 내부 영역 채우기
         bool[,] filled = new bool[w, h];
         for (int y = 0; y < h; y++)
         {
@@ -218,7 +214,6 @@ public class RoomMaker : MonoBehaviour
             }
         }
 
-        // 벽 색상 적용
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++)
                 if (_wallMap[x, y] == 1)
@@ -238,50 +233,48 @@ public class RoomMaker : MonoBehaviour
         int[] dy = { 0, 0, 1, -1, 1, -1, 1, -1 };
         int tolerance = 20;
 
+        bool[,] markInner = new bool[w, h];
         for (int y = 1; y < h - 1; y++)
         {
             for (int x = 1; x < w - 1; x++)
             {
-                Color32 cur = pixels[y * w + x];
-                if (IsColorClose(cur, _floorColor, tolerance))
+                if (IsColorClose(pixels[y * w + x], _floorColor, tolerance))
                 {
-                    bool touchingWall = false;
                     for (int i = 0; i < dx.Length; i++)
                     {
                         int nx = x + dx[i];
                         int ny = y + dy[i];
                         if (IsColorClose(pixels[ny * w + nx], _wallColor, tolerance))
                         {
-                            touchingWall = true;
+                            markInner[x, y] = true;
                             break;
                         }
                     }
-                    if (touchingWall)
-                        pixels[y * w + x] = _innerColor;
                 }
             }
         }
 
-        // 경계 확장
-        Color32[] pixelsCopy = (Color32[])pixels.Clone();
+        Color32[] resultPixels = (Color32[])pixels.Clone();
         for (int y = 1; y < h - 1; y++)
         {
             for (int x = 1; x < w - 1; x++)
             {
-                if (pixelsCopy[y * w + x].Equals(_innerColor))
+                if (markInner[x, y])
                 {
+                    resultPixels[y * w + x] = _innerColor;
+
                     for (int i = 0; i < dx.Length; i++)
                     {
                         int nx = x + dx[i];
                         int ny = y + dy[i];
-                        if (IsColorClose(pixelsCopy[ny * w + nx], _floorColor, tolerance))
-                            pixels[ny * w + nx] = _innerColor;
+                        if (IsColorClose(pixels[ny * w + nx], _floorColor, tolerance))
+                            resultPixels[ny * w + nx] = _innerColor;
                     }
                 }
             }
         }
 
-        _texCopy.SetPixels32(pixels);
+        _texCopy.SetPixels32(resultPixels);
         _texCopy.Apply();
         _floorPlanImage.texture = _texCopy;
     }
@@ -296,6 +289,12 @@ public class RoomMaker : MonoBehaviour
         return distance <= tolerance;
     }
 
+    private bool IsColorClose(Color32 c1, Color32 c2, int tolerance)
+    {
+        return Mathf.Abs(c1.r - c2.r) <= tolerance &&
+               Mathf.Abs(c1.g - c2.g) <= tolerance &&
+               Mathf.Abs(c1.b - c2.b) <= tolerance;
+    }
     #endregion
 
     #region Floor / Wall 생성
@@ -305,7 +304,6 @@ public class RoomMaker : MonoBehaviour
         int h = tex.height;
         bool[,] visited = new bool[w, h];
 
-        // 작은 벽 제거
         for (int y = 0; y < h; y++)
         {
             for (int x = 0; x < w; x++)
@@ -342,7 +340,6 @@ public class RoomMaker : MonoBehaviour
             }
         }
 
-        // OpenCV HoughLinesP
         Mat mat = OpenCVTextureUtils.Texture2DToMat(tex);
         Imgproc.cvtColor(mat, mat, Imgproc.COLOR_RGBA2GRAY);
 
@@ -546,31 +543,20 @@ public class RoomMaker : MonoBehaviour
         GameObject group = new GameObject("InnerEdgeWalls");
         group.transform.SetParent(parent, false);
 
-        // Material 재사용
         Material wallMat = new Material(Shader.Find("Universal Render Pipeline/Lit")) { color = Color.red };
 
-        HashSet<string> createdLines = new HashSet<string>();
-        HashSet<string> mergedKeys = new HashSet<string>();
-
-        foreach (var seg in mergedSegments)
-        {
-            Vector2 start = seg[0];
-            Vector2 end = seg[1];
-            if (start.x > end.x || (Mathf.Approximately(start.x, end.x) && start.y > end.y))
-            {
-                (start, end) = (end, start);
-            }
-            string key = $"{start.x:F3}_{start.y:F3}_{end.x:F3}_{end.y:F3}";
-            mergedKeys.Add(key);
-        }
+        int wallCounter = 1;
 
         int[] dx = { 1, -1, 0, 0 };
         int[] dy = { 0, 0, 1, -1 };
+
+        bool[,] visited = new bool[w, h];
 
         for (int y = 1; y < h - 1; y++)
         {
             for (int x = 1; x < w - 1; x++)
             {
+                if (visited[x, y]) continue;
                 if (!pixels[y * w + x].Equals(_innerColor)) continue;
 
                 bool nearWall = false;
@@ -588,38 +574,91 @@ public class RoomMaker : MonoBehaviour
                 }
                 if (nearWall) continue;
 
-                for (int dir = 0; dir < 4; dir++)
+                // BFS로 붙어있는 영역 찾기
+                List<Vector2Int> cluster = new List<Vector2Int>();
+                Queue<Vector2Int> q = new Queue<Vector2Int>();
+                q.Enqueue(new Vector2Int(x, y));
+                visited[x, y] = true;
+
+                while (q.Count > 0)
                 {
-                    int nx = x + dx[dir];
-                    int ny = y + dy[dir];
-                    if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-                    if (!pixels[ny * w + nx].Equals(_innerColor)) continue;
+                    var cur = q.Dequeue();
+                    cluster.Add(cur);
 
-                    Vector2 start = new Vector2(x, y);
-                    Vector2 end = new Vector2(nx, ny);
-                    if (start.x > end.x || (Mathf.Approximately(start.x, end.x) && start.y > end.y))
-                        (start, end) = (end, start);
+                    for (int dir = 0; dir < 4; dir++)
+                    {
+                        int nx = cur.x + dx[dir];
+                        int ny = cur.y + dy[dir];
+                        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                        if (visited[nx, ny]) continue;
+                        if (pixels[ny * w + nx].Equals(_innerColor))
+                        {
+                            visited[nx, ny] = true;
+                            q.Enqueue(new Vector2Int(nx, ny));
+                        }
+                    }
+                }
 
-                    string key = $"{start.x:F3}_{start.y:F3}_{end.x:F3}_{end.y:F3}";
-                    if (createdLines.Contains(key) || mergedKeys.Contains(key)) continue;
-                    createdLines.Add(key);
+                if (cluster.Count == 0) continue;
 
-                    Vector3 p0 = new Vector3(start.x * scaleX - _planeSize.x * 0.5f, 0f, start.y * scaleZ - _planeSize.y * 0.5f);
-                    Vector3 p1 = new Vector3(end.x * scaleX - _planeSize.x * 0.5f, 0f, end.y * scaleZ - _planeSize.y * 0.5f);
-                    Vector3 dirVec = p1 - p0;
-                    float len = dirVec.magnitude;
-                    if (len < 0.01f) continue;
+                // MergedWall 생성
+                GameObject mergedWall = new GameObject($"MergedWall_{wallCounter:00}");
+                mergedWall.transform.SetParent(group.transform, false);
+                wallCounter++;
 
-                    Vector3 mid = (p0 + p1) * 0.5f;
-                    Quaternion rot = Quaternion.LookRotation(dirVec.normalized, Vector3.up);
+                // Cluster를 Cube로 만들고 Mesh 합치기
+                List<GameObject> tempCubes = new List<GameObject>();
+                foreach (var p in cluster)
+                {
+                    Vector3 pos = new Vector3(p.x * scaleX - _planeSize.x * 0.5f, 0f, p.y * scaleZ - _planeSize.y * 0.5f);
+                    Vector3 worldPos = pos + Vector3.up * wallYoffset;
 
                     GameObject cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                    cube.transform.SetParent(group.transform);
-                    cube.transform.localPosition = mid + Vector3.up * wallYoffset;
-                    cube.transform.localRotation = rot;
-                    cube.transform.localScale = new Vector3(wallThickness, _wallHeight, len);
+                    cube.transform.SetParent(mergedWall.transform, false);
+                    cube.transform.localPosition = worldPos;
+                    cube.transform.localRotation = Quaternion.identity;
+                    cube.transform.localScale = new Vector3(wallThickness, _wallHeight, wallThickness);
                     cube.GetComponent<MeshRenderer>().material = wallMat;
+
+                    tempCubes.Add(cube);
                 }
+
+                // Mesh 합치기
+                MeshFilter[] meshFilters = mergedWall.GetComponentsInChildren<MeshFilter>();
+                CombineInstance[] combine = new CombineInstance[meshFilters.Length];
+                for (int i = 0; i < meshFilters.Length; i++)
+                {
+                    combine[i].mesh = meshFilters[i].sharedMesh;
+                    combine[i].transform = meshFilters[i].transform.localToWorldMatrix;
+                }
+
+                Mesh combinedMesh = new Mesh();
+                combinedMesh.CombineMeshes(combine);
+
+                // 자식 Cube 삭제
+                for (int i = mergedWall.transform.childCount - 1; i >= 0; i--)
+                    UnityEngine.Object.DestroyImmediate(mergedWall.transform.GetChild(i).gameObject);
+
+                // 합쳐진 Mesh 적용
+                var mf = mergedWall.AddComponent<MeshFilter>();
+                mf.sharedMesh = combinedMesh;
+                var mr = mergedWall.AddComponent<MeshRenderer>();
+                mr.material = wallMat;
+
+                // 피봇 중앙 이동
+                Vector3 center = mf.sharedMesh.bounds.center;
+                Vector3 offset = center;
+
+                var verts = mf.sharedMesh.vertices;
+                for (int i = 0; i < verts.Length; i++)
+                    verts[i] -= offset;
+                mf.sharedMesh.vertices = verts;
+                mf.sharedMesh.RecalculateBounds();
+
+                mergedWall.transform.localPosition += offset;
+
+                // 방향별 자식 Mesh 생성
+                SplitMeshByDirection(mergedWall);
             }
         }
 
@@ -631,6 +670,74 @@ public class RoomMaker : MonoBehaviour
 
         StartCoroutine(RiseWalls(group.transform));
         return group;
+    }
+
+    // 방향별 Mesh 분리
+    private void SplitMeshByDirection(GameObject mergedWall)
+    {
+        MeshFilter mf = mergedWall.GetComponent<MeshFilter>();
+        if (mf == null) return;
+
+        Mesh originalMesh = mf.sharedMesh;
+        Vector3[] vertices = originalMesh.vertices;
+        int[] triangles = originalMesh.triangles;
+        Vector3[] normals = originalMesh.normals;
+
+        Dictionary<string, List<int>> dirTris = new Dictionary<string, List<int>>()
+    {
+        { "Up", new List<int>() },
+        { "Down", new List<int>() },
+        { "Forward", new List<int>() },
+        { "Back", new List<int>() }
+    };
+
+        // 삼각형 단위로 분류
+        for (int i = 0; i < triangles.Length; i += 3)
+        {
+            Vector3 n0 = normals[triangles[i]];
+            Vector3 n1 = normals[triangles[i + 1]];
+            Vector3 n2 = normals[triangles[i + 2]];
+
+            Vector3 avgNormal = (n0 + n1 + n2).normalized;
+
+            string dir = "";
+            if (avgNormal.y > 0.9f) dir = "Up";
+            else if (avgNormal.y < -0.9f) dir = "Down";
+            else if (avgNormal.z > 0.9f) dir = "Forward";
+            else if (avgNormal.z < -0.9f) dir = "Back";
+
+            if (!string.IsNullOrEmpty(dir))
+            {
+                dirTris[dir].Add(triangles[i]);
+                dirTris[dir].Add(triangles[i + 1]);
+                dirTris[dir].Add(triangles[i + 2]);
+            }
+        }
+
+        Material mat = mergedWall.GetComponent<MeshRenderer>().material;
+
+        foreach (var kvp in dirTris)
+        {
+            if (kvp.Value.Count == 0) continue;
+
+            GameObject child = new GameObject(kvp.Key);
+            child.transform.SetParent(mergedWall.transform, false);
+
+            Mesh newMesh = new Mesh();
+            newMesh.vertices = vertices;
+            newMesh.triangles = kvp.Value.ToArray();
+            newMesh.normals = normals;
+
+            MeshFilter childMF = child.AddComponent<MeshFilter>();
+            childMF.sharedMesh = newMesh;
+
+            MeshRenderer childMR = child.AddComponent<MeshRenderer>();
+            childMR.material = mat;
+        }
+
+        // 기존 MeshFilter 제거
+        UnityEngine.Object.DestroyImmediate(mf);
+        UnityEngine.Object.DestroyImmediate(mergedWall.GetComponent<MeshRenderer>());
     }
 
 
@@ -648,4 +755,252 @@ public class RoomMaker : MonoBehaviour
     }
 
     #endregion
+
+    #region Flask ProjectData 기반 생성
+    // FlaskClient에서 받은 ProjectData를 기반으로 씬에 건물/층/벽/문/창문 생성
+    public void BuildFromProjectData(FlaskClient.ProjectData project)
+    {
+        if (project == null || project.buildings == null || project.buildings.Count == 0)
+            return;
+
+        // 🔥 기존 생성된 오브젝트 모두 삭제
+        foreach (Transform child in transform)
+        {
+            GameObject.DestroyImmediate(child.gameObject);
+        }
+
+        // 이후 기존 로직 그대로
+        foreach (var building in project.buildings)
+        {
+            GameObject buildingGO = new GameObject(building.name);
+            buildingGO.transform.SetParent(transform, false);
+            buildingGO.transform.position = new Vector3(building.position.x, building.position.y, building.position.z);
+
+            if (building.floors == null) continue;
+
+            foreach (var floor in building.floors)
+            {
+                GameObject floorGO = new GameObject(floor.name);
+                floorGO.transform.SetParent(buildingGO.transform, false);
+                floorGO.transform.localPosition = Vector3.up * floor.height;
+
+                if (floor.walls == null) continue;
+
+                foreach (var wall in floor.walls)
+                {
+                    Vector3 startPos = Vector3.zero;
+                    Vector3 endPos = Vector3.right;
+
+                    GameObject wallGO = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    wallGO.name = wall.name;
+                    wallGO.transform.SetParent(floorGO.transform, false);
+                    wallGO.transform.position = (startPos + endPos) * 0.5f + Vector3.up * (_wallHeight * 0.5f);
+                    wallGO.transform.localScale = new Vector3(0.1f, _wallHeight, Vector3.Distance(startPos, endPos));
+
+                    if (wall.children != null)
+                    {
+                        foreach (var child in wall.children)
+                        {
+                            GameObject childGO = null;
+                            if (child.type == "door") childGO = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                            else if (child.type == "window") childGO = GameObject.CreatePrimitive(PrimitiveType.Cube);
+
+                            if (childGO != null)
+                            {
+                                childGO.name = child.name;
+                                childGO.transform.SetParent(wallGO.transform, false);
+                                childGO.transform.localPosition = new Vector3(child.properties.offset.x, child.properties.offset.y, 0);
+                                childGO.transform.localScale = new Vector3(child.properties.width, child.properties.height, 0.1f);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #endregion
+    #region Wall / FloorData 생성
+    public class FloorData
+    {
+        public float height;
+        public List<WallData> walls = new List<WallData>();
+        public List<FloorArea> floorAreas = new List<FloorArea>();
+    }
+
+    public class WallData
+    {
+        public Vector3 startPoint;
+        public Vector3 endPoint;
+    }
+
+    public class FloorArea
+    {
+        public List<Vector3> vertices = new List<Vector3>();
+    }
+
+    public FloorData GenerateFloorDataFromTexture(Texture2D tex)
+    {
+        int w = tex.width;
+        int h = tex.height;
+        Color32[] pixels = tex.GetPixels32();
+
+        FloorData floor = new FloorData();
+        floor.height = 3f;
+
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                Color32 c = pixels[y * w + x];
+
+                if (IsColorClose(c, _wallColor, 10))
+                {
+                    WallData wall = new WallData();
+                    wall.startPoint = new Vector3(x, 0, y);
+                    wall.endPoint = new Vector3(x + 1, 0, y);
+                    floor.walls.Add(wall);
+                }
+                else if (IsColorClose(c, _floorColor, 10))
+                {
+                    FloorArea area = new FloorArea();
+                    area.vertices.Add(new Vector3(x, 0, y));
+                    floor.floorAreas.Add(area);
+                }
+            }
+        }
+
+        return floor;
+    }
+    #endregion
+
+    #region JSON 직렬화용 ProjectData
+    [Serializable]
+    public class ProjectData
+    {
+        public List<BuildingData> buildings = new List<BuildingData>();
+    }
+
+    [Serializable]
+    public class BuildingData
+    {
+        public string id = "b_1";
+        public string name = "generated_building";
+        public Position position = new Position();
+        public List<FloorData> floors = new List<FloorData>();
+    }
+
+    [Serializable]
+    public class Position
+    {
+        public float x, y, z;
+    }
+
+    public ProjectData GenerateProjectDataFromTexture()
+    {
+        if (_texCopy == null)
+        {
+            Debug.LogError("TextureCopy가 없습니다.");
+            return null;
+        }
+
+        int w = _texCopy.width;
+        int h = _texCopy.height;
+        Color32[] pixels = _texCopy.GetPixels32();
+
+        ProjectData project = new ProjectData();
+        BuildingData building = new BuildingData();
+        project.buildings.Add(building);
+
+        FloorData floor = GenerateFloorDataFromTexture(_texCopy);
+        building.floors.Add(floor);
+
+        return project;
+    }
+    #endregion
+    /// <summary>
+    /// ProjectData를 JSON으로 직렬화 후 Flask 서버로 전송
+    /// </summary>
+    public void SendProjectDataToServer()
+    {
+        ProjectData project = GenerateProjectDataFromTexture();
+        if (project == null)
+        {
+            Debug.LogError("ProjectData 생성 실패");
+            return;
+        }
+
+        string json = JsonUtility.ToJson(project, true);
+        Debug.Log("Generated JSON:\n" + json);
+
+        StartCoroutine(PostJsonToFlask("http://127.0.0.1:5000/upload_project", json));
+    }
+
+    private IEnumerator PostJsonToFlask(string url, string json)
+    {
+        using (UnityWebRequest www = new UnityWebRequest(url, "POST"))
+        {
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
+            www.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            www.downloadHandler = new DownloadHandlerBuffer();
+            www.SetRequestHeader("Content-Type", "application/json");
+
+            yield return www.SendWebRequest();
+
+            if (www.result == UnityWebRequest.Result.Success)
+            {
+                Debug.Log("JSON 전송 성공: " + www.downloadHandler.text);
+            }
+            else
+            {
+                Debug.LogError("JSON 전송 실패: " + www.error);
+            }
+        }
+    }
+    public void SaveAndSendFloorData(FloorData floor)
+    {
+        if (floor == null)
+        {
+            Debug.LogError("FloorData가 없습니다.");
+            return;
+        }
+
+        // 1️⃣ JSON 저장
+        string folderPath = Path.Combine(Application.dataPath, "JsonFolder");
+        if (!Directory.Exists(folderPath))
+            Directory.CreateDirectory(folderPath);
+
+        string filePath = Path.Combine(folderPath, "project.json");
+        string jsonString = JsonUtility.ToJson(floor, true);
+        File.WriteAllText(filePath, jsonString);
+        Debug.Log($"JSON 파일 저장 완료: {filePath}");
+
+        // 2️⃣ Flask 서버 전송
+        StartCoroutine(PostJsonToFlask(jsonString));
+    }
+
+    private IEnumerator PostJsonToFlask(string json)
+    {
+        string url = "http://127.0.0.1:5000/upload_project"; // Flask 서버 주소
+        UnityWebRequest request = new UnityWebRequest(url, "POST");
+        byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(json);
+        request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+        request.downloadHandler = new DownloadHandlerBuffer();
+        request.SetRequestHeader("Content-Type", "application/json");
+
+        yield return request.SendWebRequest();
+
+#if UNITY_2020_1_OR_NEWER
+        if (request.result != UnityWebRequest.Result.Success)
+#else
+    if (request.isNetworkError || request.isHttpError)
+#endif
+        {
+            Debug.LogError($"JSON 전송 실패: {request.responseCode} {request.error}");
+        }
+        else
+        {
+            Debug.Log($"JSON 전송 성공: {request.downloadHandler.text}");
+        }
+    }
 }
